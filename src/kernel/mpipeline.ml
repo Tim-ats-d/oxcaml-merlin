@@ -4,23 +4,22 @@ let { Logger.log } = Logger.for_section "Pipeline"
 
 let time_shift = ref 0.0
 
-let timed_lazy r x =
-  lazy
-    (let start = Misc.time_spent () in
-     let time_shift0 = !time_shift in
-     let update () =
-       let delta = Misc.time_spent () -. start in
-       let shift = !time_shift -. time_shift0 in
-       time_shift := time_shift0 +. delta;
-       r := !r +. delta -. shift
-     in
-     match Lazy.force x with
-     | x ->
-       update ();
-       x
-     | exception exn ->
-       update ();
-       Std.reraise exn)
+let timed r x =
+  let start = Misc.time_spent () in
+  let time_shift0 = !time_shift in
+  let update () =
+    let delta = Misc.time_spent () -. start in
+    let shift = !time_shift -. time_shift0 in
+    time_shift := time_shift0 +. delta;
+    r := !r +. delta -. shift
+  in
+  match x () with
+  | x ->
+    update ();
+    x
+  | exception exn ->
+    update ();
+    Std.reraise exn
 
 module Cache = struct
   let cache = ref []
@@ -201,7 +200,7 @@ module Locate_overrides_with_cache =
   Phase_cache.With_cache (Overrides_phase.Locate_overrides_phase)
 
 module Typer = struct
-  type t = { errors : exn list lazy_t; result : Mtyper.result }
+  type t = { errors : exn list; result : Mtyper.result }
 end
 
 module Ppx = struct
@@ -226,10 +225,10 @@ type t =
   { config : Mconfig.t;
     state : Mocaml.typer_state;
     raw_source : Msource.t;
-    source : (Msource.t * Mreader.parsetree option) lazy_t;
-    reader : Reader.t lazy_t;
-    ppx : Ppx.t lazy_t;
-    typer : Typer.t lazy_t;
+    source : Msource.t * Mreader.parsetree option;
+    reader : Reader.t;
+    ppx : Ppx.t;
+    typer : Typer.t;
     pp_time : float ref;
     reader_time : float ref;
     ppx_time : float ref;
@@ -238,16 +237,16 @@ type t =
     ppx_cache_hit : bool ref;
     reader_cache_hit : bool ref;
     typer_cache_stats : Mtyper.typer_cache_stats ref;
-    document_overrides : string Overrides.t lazy_t;
+    document_overrides : string Overrides.t;
     document_overrides_cache_hit : bool ref;
-    locate_overrides : Lexing.position Overrides.t lazy_t;
+    locate_overrides : Lexing.position Overrides.t;
     locate_overrides_cache_hit : bool ref
   }
 
 let raw_source t = t.raw_source
 
 let input_config t = t.config
-let input_source t = fst (Lazy.force t.source)
+let input_source t = fst t.source
 
 let with_pipeline t f =
   Mocaml.with_state t.state @@ fun () ->
@@ -258,10 +257,10 @@ let get_lexing_pos t pos =
     ~filename:(Mconfig.filename t.config)
     pos
 
-let reader t = Lazy.force t.reader
+let reader t = t.reader
 
-let ppx t = Lazy.force t.ppx
-let typer t = Lazy.force t.typer
+let ppx t = t.ppx
+let typer t = t.typer
 
 let reader_config t = (reader t).config
 let reader_parsetree t = (reader t).result.Mreader.parsetree
@@ -279,10 +278,10 @@ let ppx_errors t = (ppx t).Ppx.errors
 let final_config t = (ppx t).Ppx.config
 
 let typer_result t = (typer t).Typer.result
-let typer_errors t = Lazy.force (typer t).Typer.errors
+let typer_errors t = (typer t).Typer.errors
 
-let document_overrides t = Lazy.force t.document_overrides
-let locate_overrides t = Lazy.force t.locate_overrides
+let document_overrides t = t.document_overrides
+let locate_overrides t = t.locate_overrides
 
 let process ?state ?(pp_time = ref 0.0) ?(reader_time = ref 0.0)
     ?(ppx_time = ref 0.0) ?(typer_time = ref 0.0) ?(error_time = ref 0.0)
@@ -296,9 +295,8 @@ let process ?state ?(pp_time = ref 0.0) ?(reader_time = ref 0.0)
     | Some state -> state
   in
   let source =
-    timed_lazy pp_time
-      (lazy
-        (match Mconfig.(config.ocaml.pp) with
+    timed pp_time (fun () ->
+        match Mconfig.(config.ocaml.pp) with
         | None -> (raw_source, None)
         | Some { workdir; workval } -> (
           let source = Msource.text raw_source in
@@ -308,25 +306,24 @@ let process ?state ?(pp_time = ref 0.0) ?(reader_time = ref 0.0)
               ~source ~pp:workval
           with
           | `Source source -> (Msource.make source, None)
-          | (`Interface _ | `Implementation _) as ast -> (raw_source, Some ast))))
+          | (`Interface _ | `Implementation _) as ast -> (raw_source, Some ast)))
   in
   let reader =
-    timed_lazy reader_time
-      (lazy
-        (let (lazy ((_, pp_result) as source)) = source in
-         let config = Mconfig.normalize config in
-         Mocaml.setup_reader_config config;
-         let cache_disabling =
-           match (config.merlin.use_ppx_cache, pp_result) with
-           | false, _ -> Some "configuration"
-           | true, Some _ ->
-             (* The cache could be refined in the future to also act on the
+    timed reader_time (fun () ->
+        let ((_, pp_result) as source) = source in
+        let config = Mconfig.normalize config in
+        Mocaml.setup_reader_config config;
+        let cache_disabling =
+          match (config.merlin.use_ppx_cache, pp_result) with
+          | false, _ -> Some "configuration"
+          | true, Some _ ->
+            (* The cache could be refined in the future to also act on the
                 PP phase. For now, let's disable the whole cache when there's
                 a PP. *)
-             Some "source preprocessor usage"
-           | true, None -> None
+            Some "source preprocessor usage"
+          | true, None -> None
          in
-         let { Reader_with_cache.output = result; cache_was_hit; version } =
+         let { Reader_with_cache.output = result; cache_was_hit; version; } =
            Reader_with_cache.apply ~cache_disabling
              { source; for_completion; config }
          in
@@ -342,35 +339,34 @@ let process ?state ?(pp_time = ref 0.0) ?(reader_time = ref 0.0)
                      | `Interface _ -> Intf
                      | `Implementation _ -> Impl))
          |> Env.set_unit_name;
-         { Reader.result; config; cache_version = version; cache_disabling }))
+         let cache_version =
+           if Option.is_some cache_disabling then None else version
+         in
+         { Reader.result; config; cache_version; cache_disabling })
   in
   let ppx =
-    timed_lazy ppx_time
-      (lazy
-        (let (lazy
-               { Reader.result = { Mreader.parsetree; _ };
-                 config;
-                 cache_version = reader_cache;
-                 cache_disabling = reader_cache_disabling
-               }) =
-           reader
-         in
-         let caught = ref [] in
-         Msupport.catch_errors Mconfig.(config.ocaml.warnings) caught
-         @@ fun () ->
-         let cache_disabling =
-           Option.map reader_cache_disabling ~f:(fun _ ->
-               "reader cache is disabled")
-         in
-         let { Ppx_with_cache.output = parsetree;
-               cache_was_hit;
-               version = cache_version
-             } =
-           Ppx_with_cache.apply ~cache_disabling
-             { parsetree; config; reader_cache }
-         in
-         ppx_cache_hit := cache_was_hit;
-         { Ppx.config; parsetree; errors = !caught; cache_version }))
+    timed ppx_time (fun () ->
+        let { Reader.result = { Mreader.parsetree; _ }; config; cache_version; _ }
+            =
+          reader
+        in
+        let caught = ref [] in
+        Msupport.catch_errors Mconfig.(config.ocaml.warnings) caught
+        @@ fun () ->
+        (* Currently the cache is invalidated even for source changes that don't
+             change the parsetree. To avoid that, we'd have to digest the
+             parsetree in the cache. *)
+        let cache_disabling, reader_cache =
+          match cache_version with
+          | Some _ -> (None, cache_version)
+          | None -> (Some "reader cache is disabled", None)
+        in
+        let { Ppx_with_cache.output = parsetree; cache_was_hit; version = cache_version } =
+          Ppx_with_cache.apply ~cache_disabling
+            { parsetree; config; reader_cache }
+        in
+        ppx_cache_hit := cache_was_hit;
+        { Ppx.config; parsetree; errors = !caught; cache_version })
   in
   let typer =
     Effect.Deep.match_with (fun () ->
@@ -412,21 +408,17 @@ let process ?state ?(pp_time = ref 0.0) ?(reader_time = ref 0.0)
             | _ -> None }
   in
   let document_overrides =
-    lazy
-      (let (lazy { Ppx.parsetree; cache_version = ppx_cache_version; _ }) =
-         ppx
+      let { Ppx.parsetree; cache_version = ppx_cache_version; _ } = ppx
        in
        let { Document_overrides_with_cache.output; cache_was_hit; _ } =
          Document_overrides_with_cache.apply
            { ppx_parsetree = parsetree; ppx_cache_version }
        in
        document_overrides_cache_hit := cache_was_hit;
-       output)
+       output
   in
   let locate_overrides =
-    lazy
-      (let (lazy { Ppx.parsetree; cache_version = ppx_cache_version; _ }) =
-         ppx
+      (let ({ Ppx.parsetree; cache_version = ppx_cache_version; _ }) = ppx
        in
        let { Locate_overrides_with_cache.output; cache_was_hit; _ } =
          Locate_overrides_with_cache.apply
@@ -434,6 +426,15 @@ let process ?state ?(pp_time = ref 0.0) ?(reader_time = ref 0.0)
        in
        locate_overrides_cache_hit := cache_was_hit;
        output)
+  in
+  let typer =
+    timed typer_time (fun () ->
+      let { Ppx.config; parsetree; _ } = ppx in
+      Mocaml.setup_typer_config config;
+      let result = Mtyper.run config parsetree in
+      let errors = timed error_time (fun () -> Mtyper.get_errors result) in
+      typer_cache_stats := Mtyper.get_cache_stat result;
+      { Typer.errors; result })
   in
   { config;
     state;

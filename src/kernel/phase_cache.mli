@@ -35,7 +35,7 @@ module With_cache (Phase : S) : sig
       It is generic because it does not depend on [output], and is naive because a cache
       invalidation could result in the same [output], but the [version] would be the same. *)
   module Version : sig
-    type t
+    type t = int option
 
     val equal : t -> t -> bool
   end
