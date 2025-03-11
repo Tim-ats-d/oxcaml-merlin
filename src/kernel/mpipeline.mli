@@ -1,6 +1,7 @@
 type t
 val make : Mconfig.t -> Msource.t -> t
 val with_pipeline : t -> (unit -> 'a) -> 'a
+
 val for_completion : Msource.position -> t -> t
 
 val raw_source : t -> Msource.t
@@ -30,3 +31,13 @@ val locate_overrides : t -> Lexing.position Overrides.t
 
 val timing_information : t -> (string * float) list
 val cache_information : t -> Std.json
+
+type shared
+val create_shared : unit -> shared
+val domain_typer : shared -> unit -> unit
+val get : shared -> Mconfig.t -> Msource.t -> t
+val closing : shared -> unit
+
+module Cache : sig
+  val get : Mconfig.t -> Mocaml.typer_state
+end
