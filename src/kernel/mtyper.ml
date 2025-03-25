@@ -111,40 +111,99 @@ let compatible_prefix_rev result_items tree_items =
   in
   aux [] (result_items, tree_items)
 
-let[@tail_mod_cons] rec type_structure caught env sg = function
-  | parsetree_item :: rest ->
-    let items, sg', part_env =
-      Typemod.merlin_type_structure env sg [ parsetree_item ]
-    in
-    let typedtree_items =
-      (items.Typedtree.str_items, items.Typedtree.str_type)
-    in
-    let part_rev_sg = List.rev_append sg' sg in
-    let item =
-      { parsetree_item;
-        typedtree_items;
-        part_env;
-        part_rev_sg;
-        part_snapshot = Btype.snapshot ();
-        part_stamp = Ident.get_currentstamp ();
-        part_uid = Shape.Uid.get_current_stamp ();
-        part_errors = !caught;
-        part_checks = !Typecore.delayed_checks;
-        part_warnings = Warnings.backup ()
-      }
-    in
-    item :: type_structure caught part_env part_rev_sg rest
-  | [] -> []
+(*  TODO @xvw 
+    - type [completion] needs to be changed for whatever type you defined to describe how far the typer must go. 
+    - type [partial] should also change adequatly.
+*)
+type partial =
+  { msg : Domain_msg.msg; shared : unit Shared.t; comp : Domain_msg.completion }
 
-let[@tail_mod_cons] rec type_signature caught env sg psg_modalities psg_loc =
-  function
+let make_partial msg shared comp = { msg; shared; comp }
+
+exception
+  Cancel_struc of (Parsetree.structure_item, Typedtree.structure_item) item list
+
+let type_structure caught { msg; shared; comp } env sg parsetree =
+  (*  TODO @xvw *)
+  let _until =
+    match comp with
+    | Domain_msg.All -> Int.max_int
+    | Part i -> i
+  in
+
+  let rec loop env sg parsetree acc =
+    (match Atomic.get msg.Domain_msg.from_main with
+    | `Empty -> ()
+    | `Waiting ->
+      while Atomic.get msg.Domain_msg.from_main == `Waiting do
+        Domain.cpu_relax ()
+      done
+    | `Closing -> raise Domain_msg.Closing
+    | `Cancel ->
+      (* Cancel_struct is catched by type_implementation *)
+      raise (Cancel_struc acc));
+
+    Shared.lock shared;
+    match parsetree with
+    | parsetree_item :: rest ->
+      let items, sg', part_env =
+        Typemod.merlin_type_structure env sg [ parsetree_item ]
+      in
+      let typedtree_items =
+        (items.Typedtree.str_items, items.Typedtree.str_type)
+      in
+      let part_rev_sg = List.rev_append sg' sg in
+      let item =
+        { parsetree_item;
+          typedtree_items;
+          part_env;
+          part_rev_sg;
+          part_snapshot = Btype.snapshot ();
+          part_stamp = Ident.get_currentstamp ();
+          part_uid = Shape.Uid.get_current_stamp ();
+          part_errors = !caught;
+          part_checks = !Typecore.delayed_checks;
+          part_warnings = Warnings.backup ()
+        }
+      in
+      Shared.unlock shared;
+      (*  TODO @xvw *)
+      if false (* until = pos *) then (env, rest, item :: acc)
+      else loop part_env part_rev_sg rest (item :: acc)
+    | [] ->
+      Shared.unlock shared;
+      (env, [], List.rev acc)
+  in
+  loop env sg parsetree []
+
+exception
+  Cancel_sig of (Parsetree.signature_item, Typedtree.signature_item) item list
+
+let type_signature caught { msg; shared; comp } env sg psg_modalities psg_loc parsetree =
+(*  TODO @xvw *)
+let _until =
+  match comp with
+  | Domain_msg.All -> Int.max_int
+  | Part i -> i
+in
+
+let rec loop env sg parsetree acc =
+  (match Atomic.get msg.Domain_msg.from_main with
+  | `Empty -> ()
+  | `Waiting ->
+    while Atomic.get msg.Domain_msg.from_main == `Waiting do
+      Domain.cpu_relax ()
+    done
+  | `Closing -> raise Domain_msg.Closing
+  | `Cancel ->
+    (* Cancel_sig is catched by type_interface *)
+    raise (Cancel_sig acc));
+
+  Shared.lock shared;
+  match parsetree with
   | parsetree_item :: rest ->
-    let { Typedtree.sig_final_env = part_env;
-          sig_items;
-          sig_type;
-          sig_modalities = _;
-          sig_sloc = _
-        } =
+    let { Typedtree.sig_final_env = part_env; sig_items; sig_type; sig_modalities = _;
+          sig_sloc = _ } =
       Typemod.merlin_transl_signature env sg
         (Ast_helper.Sg.mk ~loc:psg_loc ~modalities:psg_modalities
            [ parsetree_item ])
@@ -163,17 +222,29 @@ let[@tail_mod_cons] rec type_signature caught env sg psg_modalities psg_loc =
         part_warnings = Warnings.backup ()
       }
     in
-    item
-    :: type_signature caught part_env part_rev_sg psg_modalities psg_loc rest
-  | [] -> []
+    Shared.unlock shared;
+    (*  TODO @xvw *)
+    if false (* until = pos *) then (env, rest, item :: acc)
+    else loop part_env part_rev_sg rest (item :: acc)
+  | [] ->
+    Shared.unlock shared;
+    (env, [], List.rev acc)
+in
+loop env sg parsetree []
 
-let type_implementation config caught parsetree =
-  let { env; snapshot; ident_stamp; uid_stamp; value = cached_value; index; _ }
-      =
+open Effect
+open Effect.Deep
+
+type _ Effect.t +=
+  | Internal_partial : typedtree_items cache_result * typer_cache_stats -> unit t
+  | Partial : result -> unit t
+
+let type_implementation config caught partial parsetree =
+  let { env; snapshot; ident_stamp; uid_stamp; value = prefix; index; _ } =
     get_cache config
   in
   let rev_prefix, parsetree_suffix, cache_stats =
-    match cached_value with
+    match prefix with
     | Some (Implementation_items items) -> compatible_prefix_rev items parsetree
     | Some (Interface_items _) | None -> ([], parsetree, Miss)
   in
@@ -197,25 +268,45 @@ let type_implementation config caught parsetree =
   Stamped_hashtable.backtrack !index_changelog ~stamp;
   Env.cleanup_usage_tables ~stamp:uid_stamp';
   Shape.Uid.restore_stamp uid_stamp';
-  let suffix = type_structure caught env' sg' parsetree_suffix in
-  let () =
-    List.iteri
-      ~f:(fun i { typedtree_items = items, _; _ } ->
-        let stamp = stamp + i + 1 in
-        !index_items ~index ~stamp config (`Impl items))
-      suffix
+  let aux preprocessed_suffix suffix =
+    let () =
+      List.iteri
+        ~f:(fun i { typedtree_items = items, _; _ } ->
+          let stamp = stamp + i + 1 in
+          !index_items ~index ~stamp config (`Impl items))
+        suffix
+    in
+    let value =
+      Implementation_items (List.rev_append rev_prefix (preprocessed_suffix @ suffix))
+    in
+    return_and_cache { env; snapshot; ident_stamp; uid_stamp; value; index }
   in
-  let value = Implementation_items (List.rev_append rev_prefix suffix) in
-  ( return_and_cache { env; snapshot; ident_stamp; uid_stamp; value; index },
-    cache_stats )
+  try
+    match partial.comp with
+    | All ->
+      let _, _, suffix = type_structure caught partial env' sg' parsetree_suffix in
+      (aux [] suffix, cache_stats)
+    | Part _ ->
+      let nenv, nparsetree, first_suffix =
+        type_structure caught partial env' sg' parsetree_suffix
+      in
+      let partial_result = aux [] first_suffix in
+      perform (Internal_partial (partial_result, cache_stats));
+      let _, _, second_suffix =
+        type_structure caught { partial with comp = All } nenv sg' nparsetree
+      in
+      (aux first_suffix second_suffix, cache_stats)
+  with Cancel_struc suffix ->
+    (* Caching before cancellation *)
+    aux [] suffix |> ignore;
+    raise Domain_msg.Cancel
 
-let type_interface config caught (parsetree : Parsetree.signature) =
-  let { env; snapshot; ident_stamp; uid_stamp; value = cached_value; index; _ }
-      =
+let type_interface config caught partial (parsetree : Parsetree.signature) =
+  let { env; snapshot; ident_stamp; uid_stamp; value = prefix; index; _ } =
     get_cache config
   in
   let rev_prefix, parsetree_suffix, cache_stats =
-    match cached_value with
+    match prefix with
     | Some
         (Interface_items
           { items; psig_modalities; sig_modalities = _; sig_sloc = _ })
@@ -250,41 +341,57 @@ let type_interface config caught (parsetree : Parsetree.signature) =
   Stamped_hashtable.backtrack !index_changelog ~stamp;
   Env.cleanup_usage_tables ~stamp:uid_stamp';
   Shape.Uid.restore_stamp uid_stamp';
-  let suffix =
-    type_signature caught env' sg' parsetree.psg_modalities parsetree.psg_loc
-      parsetree_suffix
+  let aux preprocessed_suffix suffix =
+    let () =
+      List.iteri
+        ~f:(fun i { typedtree_items = items, _; _ } ->
+          let stamp = stamp + i + 1 in
+          !index_items ~index ~stamp config (`Intf items))
+        suffix
+    in
+    (* transl an empty signature to get the sig_modalities and sig_sloc *)
+    let ({ sig_final_env = _;
+          sig_items = _;
+          sig_type = _;
+          sig_modalities;
+          sig_sloc
+        }
+          : Typedtree.signature) =
+      Typemod.merlin_transl_signature Env.empty []
+        (Ast_helper.Sg.mk ~modalities:parsetree.psg_modalities
+          ~loc:parsetree.psg_loc [])
+    in
+    let value =
+      Interface_items 
+        { items = List.rev_append rev_prefix (preprocessed_suffix @ suffix);
+          sig_modalities;
+          psig_modalities = parsetree.psg_modalities;
+          sig_sloc
+        }
+    in
+    return_and_cache { env; snapshot; ident_stamp; uid_stamp; value; index }
   in
-  let () =
-    List.iteri
-      ~f:(fun i { typedtree_items = items, _; _ } ->
-        let stamp = stamp + i + 1 in
-        !index_items ~index ~stamp config (`Intf items))
-      suffix
-  in
-  (* transl an empty signature to get the sig_modalities and sig_sloc *)
-  let ({ sig_final_env = _;
-         sig_items = _;
-         sig_type = _;
-         sig_modalities;
-         sig_sloc
-       }
-        : Typedtree.signature) =
-    Typemod.merlin_transl_signature Env.empty []
-      (Ast_helper.Sg.mk ~modalities:parsetree.psg_modalities
-         ~loc:parsetree.psg_loc [])
-  in
-  let value =
-    Interface_items
-      { items = List.rev_append rev_prefix suffix;
-        sig_modalities;
-        psig_modalities = parsetree.psg_modalities;
-        sig_sloc
-      }
-  in
-  ( return_and_cache { env; snapshot; ident_stamp; uid_stamp; value; index },
-    cache_stats )
+  try
+    match partial.comp with
+    | All ->
+      let _, _, suffix = type_signature caught partial env' sg' parsetree.psg_modalities parsetree.psg_loc parsetree_suffix in
+      (aux [] suffix, cache_stats)
+    | Part _ ->
+      let nenv, nparsetree, first_suffix =
+        type_signature caught partial env' sg' parsetree.psg_modalities parsetree.psg_loc parsetree_suffix
+      in
+      let partial_result = aux [] first_suffix in
+      perform (Internal_partial (partial_result, cache_stats));
+      let _, _, second_suffix =
+        type_signature caught { partial with comp = All } nenv sg' parsetree.psg_modalities parsetree.psg_loc nparsetree
+      in
+      (aux first_suffix second_suffix, cache_stats)
+  with Cancel_sig suffix ->
+    (* Caching before cancellation *)
+    aux [] suffix |> ignore;
+    raise Domain_msg.Cancel
 
-let run config parsetree =
+let run config partial parsetree =
   if not (Env.check_state_consistency ()) then (
     (* Resetting the local store will clear the load_path cache.
        Save it now, reset the store and then restore the path. *)
@@ -317,9 +424,9 @@ let run config parsetree =
   Effect.Deep.match_with
     (function
       | `Implementation parsetree ->
-        type_implementation config caught position shared parsetree
+        type_implementation config caught partial parsetree
       | `Interface parsetree ->
-        type_interface config caught position shared parsetree)
+        type_interface config caught partial parsetree)
     parsetree
     { retc = (fun (cached_result, cache_stat) -> aux cached_result cache_stat);
       exnc = raise;

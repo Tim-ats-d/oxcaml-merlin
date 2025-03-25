@@ -101,7 +101,7 @@ let run shared config source query =
   Logger.log ~section:"New_commands" ~title:"run(query)" "%a" Logger.json
     (fun () -> Query_json.dump query);
 
-  (* Analyse *)
+  (* Analyse : need to ask for lock here *)
   let result = Query_commands.dispatch pipeline query in
   let json = Query_json.json_of_response query result in
   (json, Some pipeline)
@@ -565,8 +565,8 @@ let all_commands =
          content of the buffer."
       ~default:true
       begin
-        fun shared buffer include_types ->
-          run shared buffer (Query_protocol.Outline { include_types })
+        fun shared config buffer include_types ->
+          run shared config buffer (Query_protocol.Outline { include_types })
       end;
     command "path-of-source"
       ~doc:
@@ -772,11 +772,11 @@ let all_commands =
         ]
       ~default:("", -1, `None, false, None)
       begin
-        fun buffer (_, _, pos, lsp_compat, index) ->
+        fun shared config buffer (_, _, pos, lsp_compat, index) ->
           match pos with
           | `None -> failwith "-position <pos> is mandatory"
           | #Msource.position as pos ->
-            run buffer
+            run shared config buffer
               (Query_protocol.Stack_or_heap_enclosing (pos, lsp_compat, index))
       end;
     command "type-enclosing"
@@ -918,7 +918,7 @@ let all_commands =
     (* Used only for testing *)
     command "version" ~spec:[] ~default:() ~doc:"Print version information"
       begin
-        fun buffer () -> run buffer Query_protocol.Version
+        fun shared config buffer () -> run shared config buffer Query_protocol.Version
       end;
     (* Used only for testing *)
     command "dump"
