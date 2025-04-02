@@ -150,7 +150,7 @@ let type_structure caught { msg; shared; comp } env sg parsetree =
       while Atomic.get msg.Domain_msg.from_main == `Waiting do
         Domain.cpu_relax ()
       done
-    | `Closing -> raise Domain_msg.Closing
+    | `Closing -> raise Domain_msg.Cancel_or_Closing
     | `Cancel ->
       (* Cancel_struct is catched by type_implementation *)
       raise (Cancel_struc acc));
@@ -195,17 +195,17 @@ let type_signature caught { msg; shared; comp } env sg psg_modalities psg_loc pa
   (*  TODO @xvw *)
   let continue_typing = continue_typing comp (fun i -> i.Parsetree.psig_loc) in
 
-let rec loop env sg parsetree acc =
-  (match Atomic.get msg.Domain_msg.from_main with
-  | `Empty -> ()
-  | `Waiting ->
-    while Atomic.get msg.Domain_msg.from_main == `Waiting do
-      Domain.cpu_relax ()
-    done
-  | `Closing -> raise Domain_msg.Closing
-  | `Cancel ->
-    (* Cancel_sig is catched by type_interface *)
-    raise (Cancel_sig acc));
+  let rec loop env sg parsetree acc =
+    (match Atomic.get msg.Domain_msg.from_main with
+    | `Empty -> ()
+    | `Waiting ->
+      while Atomic.get msg.Domain_msg.from_main == `Waiting do
+        Domain.cpu_relax ()
+      done
+    | `Closing -> raise Domain_msg.Cancel_or_Closing
+    | `Cancel ->
+      (* Cancel_sig is catched by type_interface *)
+      raise (Cancel_sig acc));
 
     Shared.lock shared;
 
@@ -309,7 +309,9 @@ let type_implementation config caught partial parsetree =
   with Cancel_struc suffix ->
     (* Caching before cancellation *)
     aux [] suffix |> ignore;
-    raise Domain_msg.Cancel
+    raise Domain_msg.Cancel_or_Closing
+
+exception Exn_after_partial
 
 let type_interface config caught partial (parsetree : Parsetree.signature) =
   let { env; snapshot; ident_stamp; uid_stamp; value = prefix; index; _ } =
@@ -386,20 +388,23 @@ let type_interface config caught partial (parsetree : Parsetree.signature) =
     | All ->
       let _, _, suffix = type_signature caught partial env' sg' parsetree.psg_modalities parsetree.psg_loc parsetree_suffix in
       (aux [] suffix, cache_stats)
-    | Partial _ ->
+    | Partial _ -> (
       let nenv, nparsetree, first_suffix =
         type_signature caught partial env' sg' parsetree.psg_modalities parsetree.psg_loc parsetree_suffix
       in
       let partial_result = aux [] first_suffix in
-      perform (Internal_partial (partial_result, cache_stats));
-      let _, _, second_suffix =
-        type_signature caught { partial with comp = All } nenv sg' parsetree.psg_modalities parsetree.psg_loc nparsetree
-      in
-      (aux first_suffix second_suffix, cache_stats)
+      try
+        begin
+          perform (Internal_partial (partial_result, cache_stats));
+          let _, _, second_suffix = type_signature caught { partial with comp = All } nenv sg' parsetree.psg_modalities parsetree.psg_loc nparsetree
+          in
+          (aux first_suffix second_suffix, cache_stats)
+        end
+      with _ -> raise Exn_after_partial)
   with Cancel_sig suffix ->
     (* Caching before cancellation *)
     aux [] suffix |> ignore;
-    raise Domain_msg.Cancel
+    raise Domain_msg.Cancel_or_Closing
 
 let run config partial parsetree =
   if not (Env.check_state_consistency ()) then (
