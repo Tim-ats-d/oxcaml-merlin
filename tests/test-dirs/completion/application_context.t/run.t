@@ -4,7 +4,7 @@
   [
     "application",
     {
-      "argument_type": "'_weak2",
+      "argument_type": "int",
       "labels": [
         {
           "name": "~j",
