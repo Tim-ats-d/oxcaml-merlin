@@ -285,14 +285,14 @@ let locate_overrides t = t.locate_overrides
 
 type shared =
   { msg : Domain_msg.msg;
-    config : (Mconfig.t * Msource.t) option Shared.t;
+    config : (Mconfig.t * Msource.t * (int * int) option) option Shared.t;
     (* Partial result *)
     partial : t option Shared.t;
     (* Use to protect typer computation *)
     result : unit Shared.t
   }
 
-let process ?state ?(pp_time = ref 0.0) ?(reader_time = ref 0.0)
+let process ?position ?state ?(pp_time = ref 0.0) ?(reader_time = ref 0.0)
     ?(ppx_time = ref 0.0) ?(typer_time = ref 0.0) ?(error_time = ref 0.0)
     ?(ppx_cache_hit = ref false) ?(reader_cache_hit = ref false)
     ?(document_overrides_cache_hit = ref false)
@@ -411,7 +411,7 @@ let process ?state ?(pp_time = ref 0.0) ?(reader_time = ref 0.0)
           let result =
             Mtyper.(
               run config
-                (make_partial shared.msg shared.result Domain_msg.All)
+                (make_partial ?position shared.msg shared.result)
                 parsetree)
           in
           cache_and_return_typer result))
@@ -484,7 +484,8 @@ Est-ce que l'utilisation d'un effet ne simplifie pas assez ?
 
 *)
 
-let make config source shared = process (Mconfig.normalize config) source shared
+let make ?position config source shared =
+  process ?position (Mconfig.normalize config) source shared
 
 (* let for_completion position
     { config;
@@ -577,10 +578,10 @@ let domain_typer shared () =
       | None ->
         Shared.wait shared.config;
         loop ()
-      | Some (config, source) ->
+      | Some (config, source, potential_pos) ->
         Shared.set shared.config None;
         (try
-           let mpipeline = make config source shared in
+           let mpipeline = make ?position:potential_pos config source shared in
            Shared.locking_set shared.partial (Some mpipeline)
          with
         | Domain_msg.Cancel -> ()
@@ -590,8 +591,8 @@ let domain_typer shared () =
   in
   Shared.protect shared.config (fun () -> loop ())
 
-let get shared config source =
-  Shared.locking_set shared.config (Some (config, source));
+let get ?position shared config source =
+  Shared.locking_set shared.config (Some (config, source, position));
 
   let rec loop () =
     let critical_section () =
