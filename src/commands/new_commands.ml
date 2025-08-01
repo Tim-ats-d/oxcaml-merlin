@@ -35,7 +35,7 @@ type command =
       * Marg.docstring
       * ([ `Mandatory | `Optional | `Many ] * 'args Marg.spec) list
       * 'args
-      * (Mpipeline.shared ->
+      * (Mpipeline.t Domain_msg.t ->
         Mconfig.t ->
         Msource.t ->
         'args ->
@@ -101,22 +101,15 @@ let run ?position shared config source query =
   Logger.log ~section:"New_commands" ~title:"run(query)" "%a" Logger.json
     (fun () -> Query_json.dump query);
 
-  (* Analyse : need to ask for lock here *)
-  (* Main domain signals it wants the lock  *)
-  if Atomic.compare_and_set shared.msg.from_main `Empty `Waiting then
-    let result =
-      Shared.protect shared.result (fun () ->
-          (* The write on mess_main needed 
-              to happen in the lock to ensure the main domain got it, before 
-              releasing the typer domain of its active wait *)
-          Atomic.set shared.msg.from_main `Empty;
-          Query_commands.dispatch pipeline query)
-    in
-    let json = Query_json.json_of_response query result in
-    (json, Some pipeline)
-  else
-    (* This can happen when the typer domain found an exception *)
-    failwith "To debug."
+  (* Analyse : to get the priority on the mutex, the main domain set the waiting flag to true. *)
+  Atomic.set shared.waiting true;
+  let result =
+    Shared.protect shared.msg (fun () ->
+        Atomic.set shared.waiting false;
+        Query_commands.dispatch pipeline query)
+  in
+  let json = Query_json.json_of_response query result in
+  (json, Some pipeline)
 
 let all_commands =
   [ command "case-analysis"
