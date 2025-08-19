@@ -124,14 +124,10 @@ let continue_typing position get_location item =
     let loc = get_location item in
     let start = loc.Location.loc_start in
     match Int.compare line start.pos_lnum with
-    | 0 -> Int.compare column (Lexing.column start) >= 0
-    | i -> i >= 0)
+    | 0 -> Int.compare column (Lexing.column start) > 0
+    | i -> i > 0)
 
-(* TODO It should be possible to cache the result in case an exception is raised 
-during typing by encapsulating the partial result (before the exception) and the 
-exception in an other exception, catched by type_implementation.  *)
 let type_structure caught position ((shared : _ Domain_msg.t)) env sg parsetree =
-  (*  TODO @xvw *)
   let open Domain_msg in
   let continue_typing =
     continue_typing position (fun i -> i.Parsetree.pstr_loc)
@@ -187,7 +183,6 @@ let type_structure caught position ((shared : _ Domain_msg.t)) env sg parsetree 
             }
         in
         Shared.unlock shared.msg;
-        (*  TODO @xvw *)
         if not (continue_typing parsetree_item) then (env, rest, item :: acc)
         else loop part_env part_rev_sg rest (item :: acc)
       | [] ->
@@ -197,7 +192,6 @@ let type_structure caught position ((shared : _ Domain_msg.t)) env sg parsetree 
   loop env sg parsetree []
 
 let type_signature caught position (shared : _ Domain_msg.t) env sg psg_modalities psg_loc parsetree =
-  (*  TODO @xvw *)
   let open Domain_msg in
   let continue_typing =
     continue_typing position (fun i -> i.Parsetree.psig_loc)
@@ -252,7 +246,6 @@ let type_signature caught position (shared : _ Domain_msg.t) env sg psg_modaliti
           }
         in
         Shared.unlock shared.msg;
-        (*  TODO @xvw *)
         if not (continue_typing parsetree_item) then (env, rest, item :: acc)
         else loop part_env part_rev_sg rest (item :: acc)
       | [] ->
