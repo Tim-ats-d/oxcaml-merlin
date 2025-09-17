@@ -299,23 +299,40 @@ let run config parsetree =
   let caught = ref [] in
   Msupport.catch_errors Mconfig.(config.ocaml.warnings) caught @@ fun () ->
   Typecore.reset_delayed_checks ();
-  let cached_result, cache_stat =
-    match parsetree with
-    | `Implementation parsetree -> type_implementation config caught parsetree
-    | `Interface parsetree -> type_interface config caught parsetree
+
+  let aux cached_result cache_stat =
+    let stamp = Ident.get_currentstamp () in
+    Typecore.reset_delayed_checks ();
+    { config;
+      initial_env = cached_result.env;
+      initial_snapshot = cached_result.snapshot;
+      initial_stamp = cached_result.ident_stamp;
+      stamp;
+      initial_uid_stamp = cached_result.uid_stamp;
+      typedtree = cached_result.value;
+      index = cached_result.index;
+      cache_stat
+    }
   in
-  let stamp = Ident.get_currentstamp () in
-  Typecore.reset_delayed_checks ();
-  { config;
-    initial_env = cached_result.env;
-    initial_snapshot = cached_result.snapshot;
-    initial_stamp = cached_result.ident_stamp;
-    stamp;
-    initial_uid_stamp = cached_result.uid_stamp;
-    typedtree = cached_result.value;
-    index = cached_result.index;
-    cache_stat
-  }
+  Effect.Deep.match_with
+    (function
+      | `Implementation parsetree ->
+        type_implementation config caught position shared parsetree
+      | `Interface parsetree ->
+        type_interface config caught position shared parsetree)
+    parsetree
+    { retc = (fun (cached_result, cache_stat) -> aux cached_result cache_stat);
+      exnc = raise;
+      effc = fun (type a) (eff : a Effect.t) ->
+        match eff with
+        | Internal_partial (cached_result, cache_stat) ->
+          Some (fun (k : (a, _) Effect.Deep.continuation) ->
+            let r = aux cached_result cache_stat in
+            perform (Partial r);
+            continue k ()
+          )
+        | _ -> None
+    }
 
 let get_env ?pos:_ t =
   Option.value ~default:t.initial_env
