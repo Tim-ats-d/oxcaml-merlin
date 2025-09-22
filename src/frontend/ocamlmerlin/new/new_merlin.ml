@@ -112,9 +112,8 @@ let run shared =
           (match !old_store with
           | None -> ()
           | Some store ->
-            Mpipeline.(
-              (* Shared.set shared.config None; *)
-              cancel_typer shared);
+            Mpipeline.((* Shared.set shared.config None; *)
+                       cancel_typer shared);
             Local_store.close_store store);
 
           (* Start processing query *)

@@ -1,7 +1,8 @@
 type t
 
 (* Except inside Mpipeline, this function should only use in old_merlin *)
-val make : ?position:int * int -> Mconfig.t -> Msource.t -> t Domain_msg.t -> t option
+val make :
+  ?position:int * int -> Mconfig.t -> Msource.t -> t Domain_msg.t -> t option
 
 (* Except inside Mpipeline, this function should only use in old_merlin *)
 val with_pipeline : t -> (unit -> 'a) -> 'a

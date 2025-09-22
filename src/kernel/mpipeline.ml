@@ -323,32 +323,35 @@ let process ?position ?state ?(pp_time = ref 0.0) ?(reader_time = ref 0.0)
                 a PP. *)
             Some "source preprocessor usage"
           | true, None -> None
-         in
-         let { Reader_with_cache.output = result; cache_was_hit; version; } =
-           Reader_with_cache.apply ~cache_disabling
-             { source; for_completion; config }
-         in
-         reader_cache_hit := cache_was_hit;
-         (* When we loaded the configuration in Mocaml, we guessed whether we're working
+        in
+        let { Reader_with_cache.output = result; cache_was_hit; version } =
+          Reader_with_cache.apply ~cache_disabling
+            { source; for_completion; config }
+        in
+        reader_cache_hit := cache_was_hit;
+        (* When we loaded the configuration in Mocaml, we guessed whether we're working
             with an intf or impl file based on the suffix of the filename. But now we know
             based on the contents of the file, so we update the value we wrote before. *)
-         Env.get_unit_name ()
-         |> Option.map
-              ~f:
-                (Unit_info.modify_kind ~f:(fun _ ->
-                     match result.parsetree with
-                     | `Interface _ -> Intf
-                     | `Implementation _ -> Impl))
-         |> Env.set_unit_name;
-         let cache_version =
-           if Option.is_some cache_disabling then None else version
-         in
-         { Reader.result; config; cache_version; cache_disabling })
+        Env.get_unit_name ()
+        |> Option.map
+             ~f:
+               (Unit_info.modify_kind ~f:(fun _ ->
+                    match result.parsetree with
+                    | `Interface _ -> Intf
+                    | `Implementation _ -> Impl))
+        |> Env.set_unit_name;
+        let cache_version =
+          if Option.is_some cache_disabling then None else version
+        in
+        { Reader.result; config; cache_version; cache_disabling })
   in
   let ppx =
     timed ppx_time (fun () ->
-        let { Reader.result = { Mreader.parsetree; _ }; config; cache_version; _ }
-            =
+        let { Reader.result = { Mreader.parsetree; _ };
+              config;
+              cache_version;
+              _
+            } =
           reader
         in
         let caught = ref [] in
@@ -362,7 +365,10 @@ let process ?position ?state ?(pp_time = ref 0.0) ?(reader_time = ref 0.0)
           | Some _ -> (None, cache_version)
           | None -> (Some "reader cache is disabled", None)
         in
-        let { Ppx_with_cache.output = parsetree; cache_was_hit; version = cache_version } =
+        let { Ppx_with_cache.output = parsetree;
+              cache_was_hit;
+              version = cache_version
+            } =
           Ppx_with_cache.apply ~cache_disabling
             { parsetree; config; reader_cache }
         in
@@ -375,74 +381,73 @@ let process ?position ?state ?(pp_time = ref 0.0) ?(reader_time = ref 0.0)
     { Typer.errors; result }
   in
   let document_overrides =
-      let { Ppx.parsetree; cache_version = ppx_cache_version; _ } = ppx
-        in
-        let { Document_overrides_with_cache.output; cache_was_hit; _ } =
-          Document_overrides_with_cache.apply
-            { ppx_parsetree = parsetree; ppx_cache_version }
-        in
-        document_overrides_cache_hit := cache_was_hit;
-        output
+    let { Ppx.parsetree; cache_version = ppx_cache_version; _ } = ppx in
+    let { Document_overrides_with_cache.output; cache_was_hit; _ } =
+      Document_overrides_with_cache.apply
+        { ppx_parsetree = parsetree; ppx_cache_version }
     in
+    document_overrides_cache_hit := cache_was_hit;
+    output
+  in
   let locate_overrides =
-    (let ({ Ppx.parsetree; cache_version = ppx_cache_version; _ }) = ppx
-      in
-      let { Locate_overrides_with_cache.output; cache_was_hit; _ } =
-        Locate_overrides_with_cache.apply
-          { ppx_parsetree = parsetree; ppx_cache_version }
-      in
-      locate_overrides_cache_hit := cache_was_hit;
-      output)
+    let { Ppx.parsetree; cache_version = ppx_cache_version; _ } = ppx in
+    let { Locate_overrides_with_cache.output; cache_was_hit; _ } =
+      Locate_overrides_with_cache.apply
+        { ppx_parsetree = parsetree; ppx_cache_version }
+    in
+    locate_overrides_cache_hit := cache_was_hit;
+    output
   in
 
   let typer_has_been_shared = ref false in
   let typer =
-    Effect.Deep.match_with (fun () ->
-      timed typer_time (fun () ->
-         let { Ppx.config; parsetree; _ } = ppx in
-          Mocaml.setup_typer_config config;
-          let result =
-            Mtyper.(run config position shared parsetree)
-          in
-          cache_and_return_typer result))
+    Effect.Deep.match_with
+      (fun () ->
+        timed typer_time (fun () ->
+            let { Ppx.config; parsetree; _ } = ppx in
+            Mocaml.setup_typer_config config;
+            let result = Mtyper.(run config position shared parsetree) in
+            cache_and_return_typer result))
       ()
       { retc = Fun.id;
         exnc = raise;
-        effc = fun (type a) (eff : a Effect.t) ->
-          match eff with
-          | Mtyper.Partial result ->
-            Some (fun (k : (a, _) Effect.Deep.continuation) ->
-              let typer = cache_and_return_typer result in
-              let mpipeline =
-                { config;
-                  state;
-                  raw_source;
-                  source;
-                  reader;
-                  ppx;
-                  typer;
-                  pp_time;
-                  reader_time;
-                  ppx_time;
-                  typer_time;
-                  error_time;
-                  ppx_cache_hit;
-                  reader_cache_hit;
-                  typer_cache_stats;
-                  document_overrides;
-                  document_overrides_cache_hit;
-                  locate_overrides;
-                  locate_overrides_cache_hit
-                }
-              in
-              Shared.put_ack shared.msg (Result mpipeline);
-              typer_has_been_shared := true;
-              (* Back to [Mtyper.run] *)
-              Effect.Deep.continue k ())
-            | _ -> None }
+        effc =
+          (fun (type a) (eff : a Effect.t) ->
+            match eff with
+            | Mtyper.Partial result ->
+              Some
+                (fun (k : (a, _) Effect.Deep.continuation) ->
+                  let typer = cache_and_return_typer result in
+                  let mpipeline =
+                    { config;
+                      state;
+                      raw_source;
+                      source;
+                      reader;
+                      ppx;
+                      typer;
+                      pp_time;
+                      reader_time;
+                      ppx_time;
+                      typer_time;
+                      error_time;
+                      ppx_cache_hit;
+                      reader_cache_hit;
+                      typer_cache_stats;
+                      document_overrides;
+                      document_overrides_cache_hit;
+                      locate_overrides;
+                      locate_overrides_cache_hit
+                    }
+                  in
+                  Shared.put_ack shared.msg (Result mpipeline);
+                  typer_has_been_shared := true;
+                  (* Back to [Mtyper.run] *)
+                  Effect.Deep.continue k ())
+            | _ -> None)
+      }
   in
-  if !typer_has_been_shared then
-    (* assert (Option.is_some position); *)
+  if !typer_has_been_shared then (* assert (Option.is_some position); *)
     None
   else
     (* assert (position = None); *)

@@ -294,8 +294,7 @@ let all_commands =
           match pos with
           | `None -> failwith "-position <pos> is mandatory"
           | #Msource.position as pos ->
-            run ~position shared config source
-              (Query_protocol.Expand_ppx pos)
+            run ~position shared config source (Query_protocol.Expand_ppx pos)
       end;
     command "enclosing"
       ~spec:
@@ -707,11 +706,8 @@ let all_commands =
         ]
       ~default:(`None, `None, false, false, true)
       begin
-        fun shared
-          config
-          source
-          (start, stop, let_binding, pattern_binding, avoid_ghost)
-        ->
+        fun shared config source
+            (start, stop, let_binding, pattern_binding, avoid_ghost) ->
           match (start, stop) with
           | `None, `None -> failwith "-start <pos> and -end are mandatory"
           | `None, _ -> failwith "-start <pos> is mandatory"
@@ -952,7 +948,8 @@ let all_commands =
     (* Used only for testing *)
     command "version" ~spec:[] ~default:() ~doc:"Print version information"
       begin
-        fun shared config source () -> run shared config source Query_protocol.Version
+        fun shared config source () ->
+          run shared config source Query_protocol.Version
       end;
     (* Used only for testing *)
     command "dump"

@@ -127,7 +127,7 @@ let continue_typing position get_location item =
     | 0 -> Int.compare column (Lexing.column start) > 0
     | i -> i > 0)
 
-let type_structure caught position ((shared : _ Domain_msg.t)) env sg parsetree =
+let type_structure caught position (shared : _ Domain_msg.t) env sg parsetree =
   let open Domain_msg in
   let continue_typing =
     continue_typing position (fun i -> i.Parsetree.pstr_loc)
@@ -162,25 +162,25 @@ let type_structure caught position ((shared : _ Domain_msg.t)) env sg parsetree 
     | None -> (
       match parsetree with
       | parsetree_item :: rest ->
-          let items, sg', part_env =
-            Typemod.merlin_type_structure env sg [ parsetree_item ]
-          in
-          let typedtree_items =
-            (items.Typedtree.str_items, items.Typedtree.str_type)
-          in
-          let part_rev_sg = List.rev_append sg' sg in
-          let item =
-            { parsetree_item;
-              typedtree_items;
-              part_env;
-              part_rev_sg;
-              part_snapshot = Btype.snapshot ();
-              part_stamp = Ident.get_currentstamp ();
-              part_uid = Shape.Uid.get_current_stamp ();
-              part_errors = !caught;
-              part_checks = !Typecore.delayed_checks;
-              part_warnings = Warnings.backup ()
-            }
+        let items, sg', part_env =
+          Typemod.merlin_type_structure env sg [ parsetree_item ]
+        in
+        let typedtree_items =
+          (items.Typedtree.str_items, items.Typedtree.str_type)
+        in
+        let part_rev_sg = List.rev_append sg' sg in
+        let item =
+          { parsetree_item;
+            typedtree_items;
+            part_env;
+            part_rev_sg;
+            part_snapshot = Btype.snapshot ();
+            part_stamp = Ident.get_currentstamp ();
+            part_uid = Shape.Uid.get_current_stamp ();
+            part_errors = !caught;
+            part_checks = !Typecore.delayed_checks;
+            part_warnings = Warnings.backup ()
+          }
         in
         Shared.unlock shared.msg;
         if not (continue_typing parsetree_item) then (env, rest, item :: acc)
@@ -191,7 +191,8 @@ let type_structure caught position ((shared : _ Domain_msg.t)) env sg parsetree 
   in
   loop env sg parsetree []
 
-let type_signature caught position (shared : _ Domain_msg.t) env sg psg_modalities psg_loc parsetree =
+let type_signature caught position (shared : _ Domain_msg.t) env sg
+    psg_modalities psg_loc parsetree =
   let open Domain_msg in
   let continue_typing =
     continue_typing position (fun i -> i.Parsetree.psig_loc)
@@ -226,10 +227,15 @@ let type_signature caught position (shared : _ Domain_msg.t) env sg psg_modaliti
     | None -> (
       match parsetree with
       | parsetree_item :: rest ->
-        let { Typedtree.sig_final_env = part_env; sig_items; sig_type; sig_modalities = _; sig_sloc = _ } =
+        let { Typedtree.sig_final_env = part_env;
+              sig_items;
+              sig_type;
+              sig_modalities = _;
+              sig_sloc = _
+            } =
           Typemod.merlin_transl_signature env sg
             (Ast_helper.Sg.mk ~loc:psg_loc ~modalities:psg_modalities
-              [ parsetree_item ])
+               [ parsetree_item ])
         in
         let part_rev_sg = List.rev_append sig_type sg in
         let item =
@@ -301,14 +307,17 @@ let type_implementation config caught position shared parsetree =
         suffix
     in
     let value =
-      Implementation_items (List.rev_append rev_prefix (preprocessed_suffix @ suffix))
+      Implementation_items
+        (List.rev_append rev_prefix (preprocessed_suffix @ suffix))
     in
     return_and_cache { env; snapshot; ident_stamp; uid_stamp; value; index }
   in
   try
     match position with
     | None ->
-      let _, _, suffix =  type_structure caught position shared env' sg' parsetree_suffix in
+      let _, _, suffix =
+        type_structure caught position shared env' sg' parsetree_suffix
+      in
       (aux [] suffix, cache_stats)
     | Some _ -> (
       let nenv, nparsetree, first_suffix =
@@ -340,7 +349,8 @@ let type_implementation config caught position shared parsetree =
     aux [] suffix |> ignore;
     raise Domain_msg.Cancel_or_Closing
 
-let type_interface config caught position shared (parsetree : Parsetree.signature) =
+let type_interface config caught position shared
+    (parsetree : Parsetree.signature) =
   let { env; snapshot; ident_stamp; uid_stamp; value = prefix; index; _ } =
     get_cache config
   in
@@ -390,18 +400,18 @@ let type_interface config caught position shared (parsetree : Parsetree.signatur
     in
     (* transl an empty signature to get the sig_modalities and sig_sloc *)
     let ({ sig_final_env = _;
-          sig_items = _;
-          sig_type = _;
-          sig_modalities;
-          sig_sloc
-        }
+           sig_items = _;
+           sig_type = _;
+           sig_modalities;
+           sig_sloc
+         }
           : Typedtree.signature) =
       Typemod.merlin_transl_signature Env.empty []
         (Ast_helper.Sg.mk ~modalities:parsetree.psg_modalities
-          ~loc:parsetree.psg_loc [])
+           ~loc:parsetree.psg_loc [])
     in
     let value =
-      Interface_items 
+      Interface_items
         { items = List.rev_append rev_prefix (preprocessed_suffix @ suffix);
           sig_modalities;
           psig_modalities = parsetree.psg_modalities;
@@ -413,18 +423,23 @@ let type_interface config caught position shared (parsetree : Parsetree.signatur
   try
     match position with
     | None ->
-      let _, _, suffix = type_signature caught position shared env' sg' parsetree.psg_modalities parsetree.psg_loc parsetree_suffix in
+      let _, _, suffix =
+        type_signature caught position shared env' sg' parsetree.psg_modalities
+          parsetree.psg_loc parsetree_suffix
+      in
       (aux [] suffix, cache_stats)
     | Some _ -> (
       let nenv, nparsetree, first_suffix =
-        type_signature caught position shared env' sg' parsetree.psg_modalities parsetree.psg_loc parsetree_suffix
+        type_signature caught position shared env' sg' parsetree.psg_modalities
+          parsetree.psg_loc parsetree_suffix
       in
       let partial_result = aux [] first_suffix in
       try
         begin
           perform (Internal_partial (partial_result, cache_stats));
           let _, _, second_suffix =
-            type_signature caught None shared nenv sg' parsetree.psg_modalities parsetree.psg_loc nparsetree
+            type_signature caught None shared nenv sg' parsetree.psg_modalities
+              parsetree.psg_loc nparsetree
           in
           (aux first_suffix second_suffix, cache_stats)
         end
@@ -479,15 +494,16 @@ let run config position shared parsetree =
     parsetree
     { retc = (fun (cached_result, cache_stat) -> aux cached_result cache_stat);
       exnc = raise;
-      effc = fun (type a) (eff : a Effect.t) ->
-        match eff with
-        | Internal_partial (cached_result, cache_stat) ->
-          Some (fun (k : (a, _) Effect.Deep.continuation) ->
-            let r = aux cached_result cache_stat in
-            perform (Partial r);
-            continue k ()
-          )
-        | _ -> None
+      effc =
+        (fun (type a) (eff : a Effect.t) ->
+          match eff with
+          | Internal_partial (cached_result, cache_stat) ->
+            Some
+              (fun (k : (a, _) Effect.Deep.continuation) ->
+                let r = aux cached_result cache_stat in
+                perform (Partial r);
+                continue k ())
+          | _ -> None)
     }
 
 let get_env ?pos:_ t =
