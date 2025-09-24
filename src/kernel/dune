@@ -4,8 +4,8 @@
 (rule
  (copy# ../ocaml/driver/pparse.mli pparse.mli))
 
-(rule
- (copy# ../runtime/float32.c float32.c))
+; (rule
+;  (copy# ../runtime/float32.c float32.c))
 
 (library
  (name merlin_kernel)
@@ -22,7 +22,8 @@
  (libraries merlin_config os_ipc ocaml_parsing ocaml_preprocess ocaml_typing
             ocaml_utils merlin_extend merlin_specific merlin_utils
             merlin_dot_protocol merlin_index_format unix str)
- (foreign_stubs (language c) (names float32)))
+ ; (foreign_stubs (language c) (names float32))
+ )
 
 (rule
  (targets standard_library.ml)

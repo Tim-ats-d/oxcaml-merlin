@@ -294,6 +294,7 @@ let all_commands =
           match pos with
           | `None -> failwith "-position <pos> is mandatory"
           | #Msource.position as pos ->
+            let position = Msource.get_position source pos in
             run ~position shared config source (Query_protocol.Expand_ppx pos)
       end;
     command "enclosing"
