@@ -468,8 +468,7 @@ let all_commands =
           match pos with
           | `None -> failwith "-position <pos> is mandatory"
           | #Msource.position as pos ->
-            let position = Msource.get_position source pos in
-            run ~position shared config source
+            run shared config source
               (Query_protocol.Phrase (target, pos))
       end;
     command "list-modules"
@@ -624,8 +623,7 @@ let all_commands =
           | None, _ -> failwith "-action is mandatory"
           | _, `None -> failwith "-position is mandatory"
           | Some action, (#Msource.position as pos) ->
-            let position = Msource.get_position source pos in
-            run ~position shared config source
+            run shared config source
               (Query_protocol.Refactor_open (action, pos))
       end;
     command "search-by-polarity"

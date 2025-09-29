@@ -100,11 +100,7 @@ Completions in a module type context.
   $ completions_for "module type S = " 16
   {
     "name": "foobar",
-    "kind": "Value"
-  }
-  {
-    "name": "Foobar",
-    "kind": "Constructor"
+    "kind": "Signature"
   }
   {
     "name": "Foobar",
@@ -116,7 +112,11 @@ Completions in a module type context.
   }
   {
     "name": "foobar",
-    "kind": "Signature"
+    "kind": "Value"
+  }
+  {
+    "name": "Foobar",
+    "kind": "Constructor"
   }
 
 Completions in a pattern
